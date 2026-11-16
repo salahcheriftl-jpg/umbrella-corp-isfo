@@ -1,7 +1,9 @@
 // Tiny shared store for the Umbrella intranet. One Vercel function + Vercel's built-in KV (Upstash Redis).
 const crypto = require("crypto");
-const RU = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-const RT = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+// works with any env prefix Vercel/Upstash picked (KV_, UPSTASH_REDIS_, STORAGE_, ...)
+const pick = (re) => { const k = Object.keys(process.env).find((n) => re.test(n) && process.env[n]); return k ? process.env[k] : undefined; };
+const RU = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || pick(/(REST_API_URL|REST_URL)$/);
+const RT = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || pick(/(REST_API_TOKEN|REST_TOKEN)$/);
 const FIXED = ["agents", "docs", "ch-lobby", "dms", "invites"];
 const ID_RE = /^[A-Za-z0-9_|-]{1,90}$/, UID_RE = /^[A-Za-z0-9]{6,40}$/, TOK_RE = /^[A-Za-z0-9]{16,64}$/;
 const AUTH = new Map(); // uid -> {th, until}  (only verified pairs are cached)
