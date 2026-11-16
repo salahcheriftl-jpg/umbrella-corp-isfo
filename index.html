@@ -337,7 +337,7 @@ function connectApi(){
  if(!/^https?:$/.test(location.protocol)){offWhy("This is a saved file. Open your https://...vercel.app address instead.");return}
  if(!/^[A-Za-z0-9]{6,40}$/.test(uid)){uid=Math.random().toString(36).slice(2,10).padEnd(8,"x");try{localStorage.setItem("umb_uid",uid)}catch(e){}}
  fetch("/api/db",{method:"POST",headers:{"Content-Type":"application/json"},body:'{"ping":1}'}).then(function(r){return r.json()}).then(function(j){
-  if(!j||!j.ok){offWhy(j&&j.error==="storage"?"Storage is not attached. Vercel > Storage > create Upstash Redis > connect it to this project > Redeploy.":"The storage function answered with an error.");return}
+  if(!j||!j.ok){offWhy(j&&j.error==="storage"?"Storage is not attached (redeploy after connecting it). Variables the server can see: "+((j.seen&&j.seen.length)?j.seen.join(", "):"none")+".":"The storage function answered with an error.");return}
   db=makeApiDb();uidReal=true;paintMe();setLink();if(!$("chat").hidden){agents()}
  }).catch(function(){offWhy("The /api/db function was not found. Put the api folder at the repo root (or set Root Directory in Vercel), then Redeploy.")});
 }
