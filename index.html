@@ -330,13 +330,15 @@ function makeApiDb(){
  Q.prototype.onSnapshot=function(cb,err){var id=++sid;subs[id]={col:this.col,where:this.w,ob:this.ob,lim:this.lim,cb:cb,err:err,sig:null};needFull=true;pollSoon();return function(){delete subs[id]}};
  return {collection:function(p){return new Q(String(p).replace(/\//g,"_"))}};
 }
+var whyOff="";
+function offWhy(t){whyOff=t;try{renderList()}catch(e){}}
 function connectApi(){
- if(!/^https?:$/.test(location.protocol))return;
+ if(!/^https?:$/.test(location.protocol)){offWhy("This is a saved file. Open your https://...vercel.app address instead.");return}
  if(!/^[A-Za-z0-9]{6,40}$/.test(uid)){uid=Math.random().toString(36).slice(2,10).padEnd(8,"x");try{localStorage.setItem("umb_uid",uid)}catch(e){}}
  fetch("/api/db",{method:"POST",headers:{"Content-Type":"application/json"},body:'{"ping":1}'}).then(function(r){return r.json()}).then(function(j){
-  if(!j||!j.ok)return;
+  if(!j||!j.ok){offWhy(j&&j.error==="storage"?"Storage is not attached. Vercel > Storage > create Upstash Redis > connect it to this project > Redeploy.":"The storage function answered with an error.");return}
   db=makeApiDb();uidReal=true;paintMe();setLink();if(!$("chat").hidden){agents()}
- }).catch(function(){});
+ }).catch(function(){offWhy("The /api/db function was not found. Put the api folder at the repo root (or set Root Directory in Vercel), then Redeploy.")});
 }
 function setLink(){var l=$("lk");l.textContent=db?"ONLINE":"LOCAL ONLY";l.className=db?"":"off"}
 
@@ -530,7 +532,7 @@ function addByAid(raw){
 function renderList(){
  var c=$("chs");c.innerHTML="";
  c.appendChild(lbl("GROUP"));c.appendChild(row("lobby","# LOBBY (ALL)"));
- if(!db){c.appendChild(lbl("FRIENDS"));c.appendChild(hint("Open this page signed in to add agents."));return}
+ if(!db){c.appendChild(lbl("FRIENDS"));c.appendChild(hint(whyOff||"Open this page signed in to add agents."));return}
  var fr=Object.keys(FR).filter(function(u){return u!==uid});
  fr.sort(function(a,b){return (online(AG[b])?1:0)-(online(AG[a])?1:0)||nmOf(a).localeCompare(nmOf(b))});
  if(INV_IN.length){
