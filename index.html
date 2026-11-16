@@ -331,7 +331,8 @@ function makeApiDb(){
  return {collection:function(p){return new Q(String(p).replace(/\//g,"_"))}};
 }
 var whyOff="";
-function offWhy(t){whyOff=t;try{renderList()}catch(e){}}
+var retryN=0;
+function offWhy(t){whyOff=t;try{renderList()}catch(e){}if(retryN++<40&&/^https?:$/.test(location.protocol))setTimeout(connectApi,8000)}
 function connectApi(){
  if(!/^https?:$/.test(location.protocol)){offWhy("This is a saved file. Open your https://...vercel.app address instead.");return}
  if(!/^[A-Za-z0-9]{6,40}$/.test(uid)){uid=Math.random().toString(36).slice(2,10).padEnd(8,"x");try{localStorage.setItem("umb_uid",uid)}catch(e){}}
@@ -512,7 +513,7 @@ function cancelInvite(inv){S.tick();invRef(inv.fromAid,inv.toAid).delete().catch
 function setAdd(t){addMsg=t;var e=$("am");if(e)e.textContent=t}
 
 function addByAid(raw){
- if(!db||!uidReal){setAdd("Sign-in required to add agents.");return}
+ if(!db||!uidReal){setAdd("Not connected yet. "+(whyOff||"Trying again..."));return}
  var id=normAid(raw);
  if(id.length!==6){setAdd("Invalid ID. Format: UMB-XXXXXX");S.no();return}
  if(id===myAid()){setAdd("That is your own ID.");S.no();return}
@@ -532,7 +533,7 @@ function addByAid(raw){
 function renderList(){
  var c=$("chs");c.innerHTML="";
  c.appendChild(lbl("GROUP"));c.appendChild(row("lobby","# LOBBY (ALL)"));
- if(!db){c.appendChild(lbl("FRIENDS"));c.appendChild(hint(whyOff||"Open this page signed in to add agents."));return}
+ if(!db){c.appendChild(lbl("FRIENDS"));c.appendChild(hint("OFFLINE: "+(whyOff||"connecting...")));return}
  var fr=Object.keys(FR).filter(function(u){return u!==uid});
  fr.sort(function(a,b){return (online(AG[b])?1:0)-(online(AG[a])?1:0)||nmOf(a).localeCompare(nmOf(b))});
  if(INV_IN.length){
@@ -607,7 +608,7 @@ function join(key){
  renderList();
  $("ct").textContent=dm?"DIRECT LINE: "+nmOf(other)+(online(AG[other])?" (online)":" (offline)"):"GROUP CHANNEL: LOBBY"+(db?"":"  (messages stay on this terminal)");
  msgs=[];
- if(!db){if(dm){msgs=[{sys:1,text:"Direct lines need a signed-in link."}];return render()}msgs=local.lobby;sysFirst();return render()}
+ if(!db){if(dm){msgs=[{sys:1,text:"Direct lines need a connection. "+(whyOff||"Connecting...")}];return render()}msgs=local.lobby;sysFirst();return render()}
  var q=dm?db.collection("dms").where("pair","==",pairId(uid,other)).limit(300):db.collection("ch-lobby").orderBy("ts","desc").limit(80);
  try{
   unsub=q.onSnapshot(function(s){
@@ -619,7 +620,7 @@ function join(key){
   },function(e){msgs=[{sys:1,text:"LINK ERROR: "+(e&&e.code||"unknown")}];render()});
  }catch(e){msgs=[{sys:1,text:"LINK ERROR"}];render()}
 }
-function sysFirst(){if(!msgs.length)msgs.push({sys:1,text:"Standalone mode. Open this page signed in to chat with other operators."})}
+function sysFirst(){if(!msgs.length)msgs.push({sys:1,text:"OFFLINE: "+(whyOff||"connecting...")+" Messages stay on this terminal until the link is up."})}
 function render(){
  var log=$("log"),stick=log.scrollTop+log.clientHeight>=log.scrollHeight-40;
  log.innerHTML="";
@@ -690,7 +691,7 @@ function docsOn(){
 function dnum(d){return d.id.slice(-4).toUpperCase()}
 function renderDocs(){
  var l=$("dl");l.innerHTML="";
- if(!db){l.appendChild(hint("Documents are shared through a signed-in link."))}
+ if(!db){l.appendChild(hint("OFFLINE: "+(whyOff||"connecting...")+" Documents need the network link."))}
  DV.forEach(function(d){
   var b=document.createElement("button");b.type="button";b.textContent=(newD[d.id]?"* NEW ":"")+dnum(d)+" "+d.title;
   b.setAttribute("aria-current",String(!composing&&d.id===selDoc));
