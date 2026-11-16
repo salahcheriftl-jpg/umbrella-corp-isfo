@@ -1,9 +1,22 @@
 // Tiny shared store for the Umbrella intranet. One Vercel function + Vercel's built-in KV (Upstash Redis).
 const crypto = require("crypto");
-// works with any env prefix Vercel/Upstash picked (KV_, UPSTASH_REDIS_, STORAGE_, ...)
-const pick = (re) => { const k = Object.keys(process.env).find((n) => re.test(n) && process.env[n]); return k ? process.env[k] : undefined; };
-const RU = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL || pick(/(REST_API_URL|REST_URL)$/);
-const RT = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN || pick(/(REST_API_TOKEN|REST_TOKEN)$/);
+// find the Upstash/Redis connection under whatever names Vercel gave it
+function findRedis() {
+  const e = process.env, keys = Object.keys(e).filter((k) => e[k]);
+  const urlKey = keys.find((k) => /^https:\/\/\S*upstash\.io\/?$/.test(e[k]));
+  const tokKeys = keys.filter((k) => /TOKEN/i.test(k) && !/READ_?ONLY/i.test(k));
+  if (urlKey) {
+    const pre = urlKey.replace(/URL$/i, "");
+    const t = tokKeys.find((k) => k.startsWith(pre)) || tokKeys[0];
+    if (t) return { url: e[urlKey].replace(/\/$/, ""), token: e[t] };
+  }
+  for (const k of keys) { // rediss://default:TOKEN@host:port  ->  REST url + token
+    if (/^rediss?:\/\//.test(e[k])) { try { const u = new URL(e[k]); if (u.password) return { url: "https://" + u.hostname, token: decodeURIComponent(u.password) }; } catch (x) {} }
+  }
+  return null;
+}
+const RR = findRedis(), RU = RR && RR.url, RT = RR && RR.token;
+const SEEN = Object.keys(process.env).filter((k) => /URL|TOKEN|REDIS|KV|UPSTASH|STORAGE/i.test(k) && !/^(VERCEL|NEXT|npm_)/i.test(k)).slice(0, 20);
 const FIXED = ["agents", "docs", "ch-lobby", "dms", "invites"];
 const ID_RE = /^[A-Za-z0-9_|-]{1,90}$/, UID_RE = /^[A-Za-z0-9]{6,40}$/, TOK_RE = /^[A-Za-z0-9]{16,64}$/;
 const AUTH = new Map(); // uid -> {th, until}  (only verified pairs are cached)
@@ -72,7 +85,7 @@ function readOk(r, uid) {
 module.exports = async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   if (req.method !== "POST") return res.status(405).json({ ok: false, error: "method" });
-  if (!RU || !RT) return res.status(200).json({ ok: false, error: "storage" });
+  if (!RU || !RT) return res.status(200).json({ ok: false, error: "storage", seen: SEEN });
   let b = req.body;
   if (typeof b === "string") { try { b = JSON.parse(b); } catch (e) { b = {}; } }
   b = b || {};
