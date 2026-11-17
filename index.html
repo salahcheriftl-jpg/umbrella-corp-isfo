@@ -266,82 +266,149 @@ function normAid(r){return String(r||"").toUpperCase().replace(/[^A-Z0-9]/g,"").
 
 /* ---------- db ---------- */
 function connect(){
- if(!window.claude||!claude.use)return connectApi();
+ if(!window.claude||!claude.use)return connectP2p();
  claude.use("user").then(function(u){if(u&&u.id)return u.id().then(function(x){if(x){uid=x;uidReal=true;paintMe()}})}).catch(function(){})
  .then(function(){return claude.use("db")}).then(function(d){if(d){db=d;setLink();if(!$("chat").hidden){agents()}}}).catch(function(){});
 }
-/* ---------- online storage through /api/db (Vercel function + Vercel KV, no database to set up) ---------- */
-function makeApiDb(){
- var tok="";try{tok=localStorage.getItem("umb_tok")||""}catch(e){}
- if(!/^[A-Za-z0-9]{16,64}$/.test(tok)){var a=new Uint8Array(24);crypto.getRandomValues(a);tok=Array.prototype.map.call(a,function(x){return (x%36).toString(36)}).join("");try{localStorage.setItem("umb_tok",tok)}catch(e){}}
- var subs={},sid=0,vers={},cache={},needFull=true,timer=null,inflight=false,again=false,fails=0,errSent=false;
- function post(body){
-  body.uid=uid;body.tok=tok;
-  return fetch("/api/db",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){
-   return r.json().then(function(j){
-    if(!r.ok||!j||j.ok===false){var e=new Error("x");e.code=r.status===403?"permission-denied":"unavailable";throw e}
-    return j;
-   },function(){var e=new Error("x");e.code="unavailable";throw e});
+/* ---------- online without any server or database: browsers sync directly (peer-to-peer) ---------- */
+/* Everything (documents, friends, messages) is kept in this browser and re-synced whenever agents are online together. */
+var whyOff="";
+var RCOLS={agents:1,docs:1,"ch-lobby":1,dms:1,invites:1},CHAT_TTL=14*864e5;
+function netTrystero(){
+ var APP="umbrella-"+String(GATE_HASH).slice(0,12),PW=String(GATE_HASH);
+ var URLS=["https://esm.sh/trystero@0.21/torrent","https://cdn.jsdelivr.net/npm/trystero@0.21/torrent/+esm","https://esm.sh/trystero@0.20/torrent","https://cdn.jsdelivr.net/npm/trystero@0.20/torrent/+esm","https://esm.sh/trystero@0.21","https://cdn.jsdelivr.net/npm/trystero@0.21/+esm"];
+ return {join:function(h){
+  var i=0;
+  (function next(){
+   if(i>=URLS.length){h.onFail();return}
+   var u=URLS[i++];
+   import(u).then(function(m){
+    var jr=m.joinRoom||(m.default&&m.default.joinRoom);if(!jr)throw new Error("no joinRoom");
+    var room=jr({appId:APP,password:PW},"main");
+    var act=room.makeAction("umb"),snd=act[0],get=act[1];
+    room.onPeerJoin(function(id){h.onJoin(id)});
+    room.onPeerLeave(function(id){h.onLeave(id)});
+    get(function(d,id){h.onMsg(d,id)});
+    h.ready({send:function(msg,to){try{snd(msg,to||undefined)}catch(e){}}});
+   }).catch(function(){next()});
+  })();
+ }};
+}
+function makeP2pDb(){
+ var LSK="umb_store_v1",S0={},cols={},subs={},sid=0,last=0,peers={},puid={},sentId={},net=null,netFail=false,saveT=null,emitT={};
+ function now(){last=Math.max(Date.now(),last+1);return last}
+ function isRep(c){return Object.prototype.hasOwnProperty.call(RCOLS,c)}
+ function isS(v,n){return typeof v==="string"&&v.length<=n}
+ function put(col,id,rec){(cols[col]=cols[col]||{})[id]=rec;S0[col+"/"+id]=rec}
+ function save(){clearTimeout(saveT);saveT=setTimeout(function(){try{localStorage.setItem(LSK,JSON.stringify(S0))}catch(e){}},300)}
+ function purge(){var lim=Date.now()-CHAT_TTL,ch=false;Object.keys(S0).forEach(function(k){var r=S0[k],c=k.slice(0,k.indexOf("/"));if((c==="ch-lobby"||c==="dms")&&r.v&&r.v.ts<lim){delete S0[k];delete cols[c][k.slice(c.length+1)];ch=true}});if(ch)save()}
+ try{var raw=localStorage.getItem(LSK);if(raw){var o=JSON.parse(raw);Object.keys(o).forEach(function(k){var i=k.indexOf("/");if(i>0)put(k.slice(0,i),k.slice(i+1),o[k])})}}catch(e){}
+ Object.keys(S0).forEach(function(k){if(S0[k].t>last&&S0[k].t<Date.now()+864e5)last=S0[k].t});
+ purge();setInterval(purge,36e5);
+
+ /* snapshots */
+ function snap(rows){var docs=rows.map(function(r){return {id:r.id,data:function(){return JSON.parse(JSON.stringify(r.data))}}});return {docs:docs,empty:!docs.length,size:docs.length,forEach:function(f){docs.forEach(f)}}}
+ function shape(q,rows){var r=rows.slice();if(q.ob){var f=q.ob[0],d=q.ob[1]==="desc"?-1:1;r.sort(function(x,y){var m=x.data[f],n=y.data[f];return m<n?-d:m>n?d:0})}if(q.lim)r=r.slice(0,q.lim);return r}
+ function rowsOf(col,w){var o=cols[col]||{},r=[];Object.keys(o).forEach(function(id){var x=o[id];if(!x.v)return;if(w.every(function(f){return x.v[f[0]]===f[2]}))r.push({id:id,data:x.v})});return r}
+ function emit(s){var rows=shape(s,rowsOf(s.col,s.where)),sig=JSON.stringify(rows);if(sig!==s.sig){s.sig=sig;try{s.cb(snap(rows))}catch(e){}}}
+ function sched(k){if(emitT[k])return;emitT[k]=setTimeout(function(){delete emitT[k];if(subs[k])emit(subs[k])},40)}
+ function touch(col){Object.keys(subs).forEach(function(k){if(subs[k].col===col)sched(k)})}
+
+ /* networking */
+ function mySum(u){var m={};Object.keys(S0).forEach(function(k){var c=k.slice(0,k.indexOf("/")),r=S0[k];if(!isRep(c))return;if(r.p&&!(u&&r.p.indexOf(u)>=0))return;m[k]=r.t});return m}
+ function sendRecs(pid,list){var batch=[],size=0;list.forEach(function(x){var n=JSON.stringify(x).length;if(size+n>50000&&batch.length){net.send({k:"rec",r:batch},pid);batch=[];size=0}batch.push(x);size+=n});if(batch.length)net.send({k:"rec",r:batch},pid)}
+ function bcast(list,except){
+  if(!net)return;
+  Object.keys(peers).forEach(function(pid){
+   if(pid===except)return;
+   var out=list.filter(function(x){var r=x[1];return !r.p||(puid[pid]&&r.p.indexOf(puid[pid])>=0)});
+   if(out.length)sendRecs(pid,out);
   });
  }
- function snap(rows){
-  var docs=rows.map(function(r){return {id:r.id,data:function(){return JSON.parse(JSON.stringify(r.data))}}});
-  return {docs:docs,empty:!docs.length,size:docs.length,forEach:function(f){docs.forEach(f)}};
+ function sendId(pid){if(!net||sentId[pid])return;sentId[pid]=1;net.send({k:"id",uid:uid},pid)}
+ function validate(col,id,rec,ex){
+  if(!rec||typeof rec.t!=="number"||!isFinite(rec.t)||rec.t>Date.now()+864e5||typeof rec.by!=="string"||rec.by.length>40)return null;
+  var v=rec.v,exv=ex&&ex.v,out={v:null,t:rec.t,by:rec.by};
+  if(v===null){
+   var ok=false;
+   if(col==="docs")ok=!!exv&&exv.uid===rec.by;else if(col==="agents")ok=id===rec.by;else if(col==="invites")ok=!!exv&&(exv.from===rec.by||exv.to===rec.by);
+   if(!ok)return null;if(ex&&ex.p)out.p=ex.p;return out;
+  }
+  if(!v||typeof v!=="object"||Array.isArray(v)||JSON.stringify(v).length>10000)return null;
+  if(col==="agents"){if(id!==rec.by||v.uid!==rec.by)return null}
+  else if(col==="docs"){if(v.uid!==rec.by||!isS(v.title,120)||!isS(v.body,8000)||(exv&&exv.uid!==rec.by))return null}
+  else if(col==="ch-lobby"){if(v.uid!==rec.by||!isS(v.text,2000)||ex||!(v.ts>Date.now()-CHAT_TTL))return null}
+  else if(col==="dms"){if(v.from!==rec.by||!isS(v.text,2000)||ex||!(v.ts>Date.now()-CHAT_TTL)||String(v.pair||"").split("|").indexOf(rec.by)<0)return null;out.p=[v.from,v.to]}
+  else if(col==="invites"){if(!(v.from===rec.by||(exv&&exv.to===rec.by)))return null;if(exv&&(exv.from!==v.from||exv.to!==v.to))return null;out.p=[v.from,v.to]}
+  else return null;
+  out.v=v;return out;
  }
- function shape(q,rows){
-  var r=rows.slice();
-  if(q.ob){var f=q.ob[0],d=q.ob[1]==="desc"?-1:1;r.sort(function(x,y){var m=x.data[f],n=y.data[f];return m<n?-d:m>n?d:0})}
-  if(q.lim)r=r.slice(0,q.lim);return r;
+ function applyRecs(list,from){
+  var fwd=[],tc={};
+  list.slice(0,500).forEach(function(x){
+   if(!Array.isArray(x)||typeof x[0]!=="string")return;
+   var k=x[0],rec=x[1],i=k.indexOf("/");if(i<1)return;
+   var col=k.slice(0,i),id=k.slice(i+1);
+   if(!isRep(col)||!/^[A-Za-z0-9_|-]{1,90}$/.test(id)||!rec||typeof rec.t!=="number")return;
+   var ex=cols[col]&&cols[col][id];
+   if(ex&&!(rec.t>ex.t||(rec.t===ex.t&&String(rec.by)>String(ex.by))))return;
+   var c=validate(col,id,rec,ex);if(!c)return;
+   put(col,id,c);tc[col]=1;fwd.push([k,c]);if(c.t>last)last=c.t;
+  });
+  Object.keys(tc).forEach(touch);
+  if(fwd.length){save();bcast(fwd,from)}
  }
- function rk(s){return s.col+"|"+JSON.stringify(s.where)}
- function delay(){return document.hidden?20000:($("chat").hidden?6000:3000)}
- function sched(ms){clearTimeout(timer);timer=setTimeout(poll,ms)}
- function pollSoon(){if(inflight){again=true;return}sched(30)}
- function poll(){
-  var keys=Object.keys(subs);if(inflight)return;if(!keys.length){sched(delay());return}
-  inflight=true;
-  var reads=[],seen={},wasFull=needFull;needFull=false;
-  keys.forEach(function(k){var s=subs[k],r=rk(s);if(!seen[r]){seen[r]=1;reads.push({k:r,col:s.col,where:s.where})}});
-  post({reads:reads,vers:vers,full:wasFull}).then(function(j){
-   fails=0;errSent=false;
-   Object.keys(j.vers||{}).forEach(function(c){vers[c]=j.vers[c]});
-   Object.keys(j.results||{}).forEach(function(r){cache[r]=j.results[r]});
-   Object.keys(subs).forEach(function(k){
-    var s=subs[k],c=cache[rk(s)];if(!c)return;
-    var rows=shape(s,c),sig=JSON.stringify(rows);
-    if(sig!==s.sig){s.sig=sig;try{s.cb(snap(rows))}catch(e){}}
-   });
-  }).catch(function(){
-   needFull=needFull||wasFull;
-   if(++fails>=3&&!errSent){errSent=true;Object.keys(subs).forEach(function(k){try{subs[k].err&&subs[k].err({code:"unavailable"})}catch(e){}})}
-  }).then(function(){inflight=false;var a=again;again=false;sched(a?30:delay())});
+ function onMsg(d,pid){
+  if(!d||typeof d!=="object")return;
+  if(d.k==="id"){if(typeof d.uid==="string"&&/^[A-Za-z0-9]{6,40}$/.test(d.uid)){puid[pid]=d.uid;sendId(pid);if(net)net.send({k:"sum",m:mySum(d.uid)},pid)}}
+  else if(d.k==="sum"&&d.m&&typeof d.m==="object"){
+   var u=puid[pid],out=[];
+   Object.keys(S0).forEach(function(k){var c=k.slice(0,k.indexOf("/")),r=S0[k];if(!isRep(c))return;if(r.p&&!(u&&r.p.indexOf(u)>=0))return;var t=d.m[k];if(typeof t!=="number"||t<r.t)out.push([k,r])});
+   if(out.length&&net)sendRecs(pid,out);
+  }
+  else if(d.k==="rec"&&Array.isArray(d.r))applyRecs(d.r,pid);
  }
- document.addEventListener("visibilitychange",function(){if(!document.hidden)pollSoon()});
- function write(op,col,id,data){return post({writes:[{op:op,col:col,id:id,data:data}]}).then(function(){pollSoon()})}
+ function status(){try{setLink()}catch(e){}}
+ var f=window.__umbNetTest||netTrystero();
+ f.join({
+  onJoin:function(pid){peers[pid]=1;sendId(pid);status()},
+  onLeave:function(pid){delete peers[pid];delete puid[pid];delete sentId[pid];status()},
+  onMsg:onMsg,
+  ready:function(n){net=n;Object.keys(peers).forEach(sendId);status()},
+  onFail:function(){netFail=true;status()}
+ });
+ setInterval(function(){if(net)Object.keys(peers).forEach(function(pid){if(puid[pid])net.send({k:"sum",m:mySum(puid[pid])},pid)})},60000);
+
+ /* Firestore-like API the rest of the page already uses */
+ function write(op,col,id,data){
+  id=String(id);var ex=cols[col]&&cols[col][id],exv=ex&&ex.v;
+  if(op==="delete"&&!exv)return Promise.resolve();
+  if(op==="update"){if(!exv)return Promise.reject({code:"not-found"});data=Object.assign({},exv,data)}
+  var rec={v:op==="delete"?null:JSON.parse(JSON.stringify(data)),t:now(),by:uid};
+  if(col==="dms"||col==="invites"){var s=op==="delete"?exv:rec.v;if(s&&s.from&&s.to)rec.p=[s.from,s.to]}
+  put(col,id,rec);touch(col);save();
+  if(isRep(col))bcast([[col+"/"+id,rec]],null);
+  return Promise.resolve();
+ }
  function Q(col,w,ob,lim){this.col=col;this.w=w||[];this.ob=ob||null;this.lim=lim||0}
  Q.prototype.where=function(f,o,v){if(o!=="==")throw new Error("op");return new Q(this.col,this.w.concat([[f,"==",v]]),this.ob,this.lim)};
  Q.prototype.orderBy=function(f,d){return new Q(this.col,this.w,[f,d||"asc"],this.lim)};
  Q.prototype.limit=function(n){return new Q(this.col,this.w,this.ob,n)};
- Q.prototype.doc=function(id){var c=this.col;return {
-  set:function(d){return write("set",c,id,d)},
-  update:function(d){return write("update",c,id,d)},
-  "delete":function(){return write("delete",c,id)}}};
- Q.prototype.get=function(){var q=this;return post({reads:[{k:"g",col:q.col,where:q.w}],vers:{},full:true}).then(function(j){return snap(shape(q,(j.results||{}).g||[]))})};
- Q.prototype.onSnapshot=function(cb,err){var id=++sid;subs[id]={col:this.col,where:this.w,ob:this.ob,lim:this.lim,cb:cb,err:err,sig:null};needFull=true;pollSoon();return function(){delete subs[id]}};
- return {collection:function(p){return new Q(String(p).replace(/\//g,"_"))}};
+ Q.prototype.doc=function(id){var c=this.col;return {set:function(d){return write("set",c,id,d)},update:function(d){return write("update",c,id,d)},"delete":function(){return write("delete",c,id)}}};
+ Q.prototype.get=function(){var q=this;return Promise.resolve(snap(shape(q,rowsOf(q.col,q.w))))};
+ Q.prototype.onSnapshot=function(cb,err){var id=++sid;subs[id]={col:this.col,where:this.w,ob:this.ob,lim:this.lim,cb:cb,err:err,sig:null};sched(id);return function(){delete subs[id]}};
+ return {collection:function(p){return new Q(String(p).replace(/\//g,"_"))},peerCount:function(){return Object.keys(peers).length},netFail:function(){return netFail}};
 }
-var whyOff="";
-var retryN=0;
-function offWhy(t){whyOff=t;try{renderList()}catch(e){}if(retryN++<40&&/^https?:$/.test(location.protocol))setTimeout(connectApi,8000)}
-function connectApi(){
- if(!/^https?:$/.test(location.protocol)){offWhy("This is a saved file. Open your https://...vercel.app address instead.");return}
+function connectP2p(){
  if(!/^[A-Za-z0-9]{6,40}$/.test(uid)){uid=Math.random().toString(36).slice(2,10).padEnd(8,"x");try{localStorage.setItem("umb_uid",uid)}catch(e){}}
- fetch("/api/db",{method:"POST",headers:{"Content-Type":"application/json"},body:'{"ping":1}'}).then(function(r){return r.json()}).then(function(j){
-  if(!j||!j.ok){offWhy(j&&j.error==="storage"?"Storage is not attached (redeploy after connecting it). Variables the server can see: "+((j.seen&&j.seen.length)?j.seen.join(", "):"none")+".":"The storage function answered with an error.");return}
-  db=makeApiDb();uidReal=true;paintMe();setLink();if(!$("chat").hidden){agents()}
- }).catch(function(){offWhy("The /api/db function was not found. Put the api folder at the repo root (or set Root Directory in Vercel), then Redeploy.")});
+ db=makeP2pDb();uidReal=true;paintMe();setLink();if(!$("chat").hidden){agents()}
 }
-function setLink(){var l=$("lk");l.textContent=db?"ONLINE":"LOCAL ONLY";l.className=db?"":"off"}
+function setLink(){
+ var l=$("lk");if(!db){l.textContent="LOCAL ONLY";l.className="off";return}
+ var n=db.peerCount?db.peerCount():-1;
+ l.textContent=n<0?"ONLINE":n>0?"ONLINE ("+n+" linked)":(db.netFail&&db.netFail()?"NO PEER NETWORK (saved on this device)":"ONLINE (waiting for other agents)");
+ l.className=n===0?"off":"";
+}
 
 /* ---------- audio: quiet, no ambient hum ---------- */
 var AC=null,muted=false,powered=false,M=null;
