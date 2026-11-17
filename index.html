@@ -836,9 +836,9 @@ var LANG={
   kw:W("function local export readonly alias unset set declare"),
   lit:W("true false")}),
  sql:mk({lc:P_LC_SQL,bc:1,ci:1,nosq:0,
-  kw:W("select from where and or not insert into values update set delete create table alter drop index view database join inner outer left right full cross on group by order having limit offset as distinct union all null is in like between exists case when then else end primary key foreign references default unique constraint add column asc desc count sum avg min max"),
+  kw:W("select from where and or not insert into values update set delete create table alter drop index view database schema join inner outer left right full cross on group by order having limit offset as distinct union all null is in like between exists case when then else elseif end primary key foreign references default unique constraint add column asc desc count sum avg min max trigger procedure function delimiter after before each row for begin declare new old returns return call exec execute while loop if auto_increment check cascade engine using temporary replace show use grant revoke commit rollback transaction"),
   lit:W("true false null"),
-  ty:W("int integer bigint smallint varchar char text boolean bool date datetime timestamp float double decimal numeric serial uuid json")}),
+  ty:W("int integer bigint smallint tinyint varchar char text boolean bool date datetime timestamp time float double decimal numeric serial uuid json year real money blob")}),
  json:mk({nosq:1,lit:W("true false null")})
 };
 var ALIAS=W("");
@@ -947,12 +947,18 @@ function detect(c){
  if(/^package\s+\w+/m.test(t)||/\bfunc\s+(\(\w+\s+\*?\w+\)\s*)?\w+\(/.test(t)||/\w\s*:=\s*/.test(t))return["c","GO"];
  if(/\bconsole\.|\brequire\(|\bconst\s+[\w{[]|\blet\s+[\w{[]|=>|\bfunction\b|\bimport\s+.+\s+from\s+['"]|\bexport\s+(default|const|function)/.test(t))return["js","JAVASCRIPT"];
  if(/^\s*(def\s+\w+\s*\(|class\s+\w+.*:\s*$|from\s+[\w.]+\s+import|import\s+\w+\s*$|elif\s|print\()/m.test(t)||(/^\s*(if|for|while|with|try|else|except)\b.*:\s*$/m.test(t)&&!/[{};]\s*$/m.test(t)))return["py","PYTHON"];
- if(/\bselect\b[\s\S]+\bfrom\b|\binsert\s+into\b|\bcreate\s+table\b|\bupdate\b[\s\S]+\bset\b|\bdelete\s+from\b/i.test(t))return["sql","SQL"];
+ if(/\bselect\b[\s\S]+\bfrom\b|\binsert\s+into\b|\bupdate\s+\w+\s+set\b|\bdelete\s+from\b|^\s*(delimiter\s+\S+|create\s+(or\s+replace\s+)?(table|trigger|procedure|function|view|index|database|schema)\b|alter\s+table\b|drop\s+(table|trigger|database)\b)/im.test(t))return["sql","SQL"];
  if(/^(#!\/(usr\/)?bin\/(env\s+)?(ba|z)?sh|\s*\$\s|\s*(sudo|apt(-get)?|npm|npx|pip3?|git|cd|ls|mkdir|chmod|curl|wget|brew|docker|ssh|echo|export|cat|grep|rm|mv|cp)\s)/m.test(t))return["sh","SHELL"];
  return["js","CODE"];
 }
 /* is this line code? 2 = surely, 1 = probably (needs a neighbour) */
 var RX_V=[/[;{]\s*$/,/=>/,
+ /^\s*(create|alter|drop)\s+(or\s+replace\s+)?(table|trigger|procedure|function|view|index|database|schema)\b/i,
+ /^\s*(insert\s+into|delete\s+from|truncate\s+table)\b/i,
+ /^\s*delimiter\s+\S+\s*$/i,
+ /^\s*select\s+(\*|[\w.,\s()*`]+?)\s+from\b/i,/^\s*update\s+\w+\s+set\b/i,
+ /^\s*(after|before)\s+(insert|update|delete)\s+on\s+\w+/i,/^\s*for\s+each\s+row\s*$/i,
+ /^\s*end\s*(\/\/|\$\$)\s*$/i,
  /^\s*(def|class|function|async\s+function|func|fn|fun|interface|enum|struct)\s+[\w$]+.*[:({]\s*$/,
  /^\s*(SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM|CREATE\s+(TABLE|INDEX|VIEW|DATABASE)|ALTER\s+TABLE|DROP\s+TABLE)\b.+/,
  /^\s*\$\s+\S/,
@@ -963,7 +969,7 @@ var RX_V=[/[;{]\s*$/,/=>/,
  /^\s*(\/\/|\/\*|\*\/)/,
  /^\s*@\w+(\(.*\))?\s*$/,
  /^\s*(#include\s*[<"]|#define\s+\w+|#!\/|<\?php|<!DOCTYPE)/i];
-var RX_S=[/&&|\|\||===|!==|\+\+|::|->/,/^\s*[}\])]+[\s;,)]*$/,/[(\[]\s*$/,
+var RX_S=[/^\s*--(\s|$)/,/^\s*begin\s*$/i,/^\s*(from|where|values|group\s+by|order\s+by|having|(inner|left|right)\s+join|limit)\s+[^.!?]*$/i,/&&|\|\||===|!==|\+\+|::|->/,/^\s*[}\])]+[\s;,)]*$/,/[(\[]\s*$/,
  /^\s*(if|for|while|switch|catch|elif)\b.*[:)]\s*$/,/^\s*(else|try|finally|do)\s*:?\s*$/,
  /^\s*(return|break|continue|pass|raise|throw|yield)\b/,
  /^\s*(sudo|npm|npx|pip3?|git|cd|chmod|curl|apt(-get)?|docker|brew|ssh|mkdir|rm|ls)\s+\S/,
@@ -984,7 +990,9 @@ function chunk(ls){
  var out=[],lab=null,acc=null;
  parts.forEach(function(p){
   var t=p.join("\n"),d=detect(t)[1];
-  if(acc&&d===lab)acc+="\n\n"+t;else{if(acc!==null)out.push(acc);acc=t;lab=d}
+  if(d==="CODE"){acc=acc===null?t:acc+"\n\n"+t;return}
+  if(acc!==null&&(lab===null||d===lab)){acc+="\n\n"+t;lab=d;return}
+  if(acc!==null)out.push(acc);acc=t;lab=d;
  });
  if(acc!==null)out.push(acc);return out;
 }
